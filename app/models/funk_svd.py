@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from numpy.typing import NDArray
 
 class FunkSVD:
@@ -12,27 +13,33 @@ class FunkSVD:
         self.U = None
         # item latent factor matrix, shape (n_items, n_factors)
         self.V = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def fit(self, matrix: NDArray[np.float64]) -> None:
         self.matrix = matrix
         n_users, n_items = matrix.shape
 
         # small random init prevents symmetry
-        self.U = np.random.normal(0, 0.1, (n_users, self.n_factors))
-        self.V = np.random.normal(0, 0.1, (n_items, self.n_factors))
+        U = torch.normal(0, 0.1, (n_users, self.n_factors), device=self.device)
+        V = torch.normal(0, 0.1, (n_items, self.n_factors), device=self.device)
 
-        # only train on observed (u, i)
-        known_ratings = np.argwhere(matrix > 0)
+        # get indices and values of known ratings, move to GPU
+        matrix_tensor = torch.tensor(matrix, dtype=torch.float32, device=self.device)
+        rows, cols = torch.where(matrix_tensor > 0)
+        ratings = matrix_tensor[rows, cols]
 
         for epoch in range(self.epochs):
-            for u, i in known_ratings:
-                predicted = self.U[u] @ self.V[i]
-                error = matrix[u][i] - predicted
+            preds = (U[rows] * V[cols]).sum(dim=1)
+            errors = ratings - preds
 
-                # snapshot U[u] before updating so V's gradient uses the pre-update value
-                u_old = self.U[u].copy()
-                self.U[u] += self.learning_rate * (error * self.V[i] - self.alpha * self.U[u])
-                self.V[i] += self.learning_rate * (error * u_old - self.beta * self.V[i])
+            # snapshot U[rows] before updating so V's gradient uses the pre-update value
+            u_old = U[rows].clone()
+            U.index_add_(0, rows, self.learning_rate * (errors.unsqueeze(1) * V[cols] - self.alpha * U[rows]))
+            V.index_add_(0, cols, self.learning_rate * (errors.unsqueeze(1) * u_old - self.beta * V[cols]))
+
+        # move back to CPU for predict and recommend
+        self.U = U.cpu().numpy()
+        self.V = V.cpu().numpy()
 
     def predict(self, user_idx: int, item_idx: int) -> float:
         # clamp to [0, 10] to match Resona's rating scale
