@@ -1,7 +1,10 @@
+import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 from app.db.fetch_ratings import fetch_ratings
 from app.models.funk_svd import FunkSVD

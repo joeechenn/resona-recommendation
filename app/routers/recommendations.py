@@ -1,9 +1,12 @@
+import logging
 import numpy as np
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app.db.fetch_ratings import fetch_ratings
 from app.models.funk_svd import FunkSVD
 
+logger = logging.getLogger(__name__)
+MIN_RATINGS = 15
 router = APIRouter()
 
 class RecommendationItem(BaseModel):
@@ -31,6 +34,14 @@ class RetrainResponse(BaseModel):
     n_users: int
     n_items: int
 
+class UsersResponse(BaseModel):
+    user_ids: list[str]
+
+@router.get("/users", response_model=UsersResponse)
+async def get_users(request: Request):
+    user_index: dict[str, int] = request.app.state.user_index
+    return UsersResponse(user_ids=list(user_index.keys()))
+
 @router.get("/recommendations/{user_id}", response_model=RecommendationsResponse)
 async def get_recommendations(user_id: str, request: Request, top_n: int = 10):
     model: FunkSVD = request.app.state.model
@@ -43,10 +54,14 @@ async def get_recommendations(user_id: str, request: Request, top_n: int = 10):
         raise HTTPException(status_code=404, detail="User has no ratings")
 
     user_idx = user_index[user_id]
-
-    # find column indices where this user has already rated something
     rated_items = set(np.where(matrix[user_idx] > 0)[0].tolist())
+
+    if len(rated_items) < MIN_RATINGS:
+        logger.info({"event": "insufficient_data", "user_id": user_id, "n_ratings": len(rated_items), "threshold": MIN_RATINGS})
+        return RecommendationsResponse(user_id=user_id, recommendations=[])
+
     results = model.recommend(user_idx, item_index, rated_items, top_n)
+    logger.info({"event": "recommendations_generated", "user_id": user_id, "n_ratings": len(rated_items), "recommendations": [{"item_type": t, "spotify_id": s, "score": round(score, 3)} for t, s, score in results]})
 
     return RecommendationsResponse(
         user_id=user_id,
