@@ -16,7 +16,6 @@ class FunkSVD:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def fit(self, matrix: NDArray[np.float64]) -> None:
-        self.matrix = matrix
         n_users, n_items = matrix.shape
 
         # small random init prevents symmetry
@@ -34,15 +33,19 @@ class FunkSVD:
 
             # snapshot U[rows] before updating so V's gradient uses the pre-update value
             u_old = U[rows].clone()
-            U.index_add_(0, rows, self.learning_rate * (errors.unsqueeze(1) * V[cols] - self.alpha * U[rows]))
-            V.index_add_(0, cols, self.learning_rate * (errors.unsqueeze(1) * u_old - self.beta * V[cols]))
+            U.index_add_(0, rows, self.learning_rate * errors.unsqueeze(1) * V[cols])
+            V.index_add_(0, cols, self.learning_rate * errors.unsqueeze(1) * u_old)
+
+            # apply reg once per epoch to every row, not per-rating
+            U.mul_(1 - self.learning_rate * self.alpha)
+            V.mul_(1 - self.learning_rate * self.beta)
 
         # move back to CPU for predict and recommend
         self.U = U.cpu().numpy()
         self.V = V.cpu().numpy()
 
     def predict(self, user_idx: int, item_idx: int) -> float:
-        # clamp to [0, 10] to match Resona's rating scale
+        # clamp to [0, 10] to match resona rating scale
         return float(np.clip(self.U[user_idx] @ self.V[item_idx], 0, 10))
 
     def recommend(self, user_idx: int, item_index: dict[str, int], rated_items: set[int], top_n: int = 10) -> list[tuple[str, str, float]]:
